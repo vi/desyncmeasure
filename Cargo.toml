@@ -10,10 +10,12 @@ anyhow = "1.0.43"
 #argh = "0.1.5"
 #bardecoder = "0.2.2"
 env_logger = "0.9.0"
+itertools = "0.10.1"
 #image = "0.22"
 log = "0.4.14"
 mkv = {path="/mnt/bkel/vi/code/mkv.rs"}
 num-complex = "0.4.0"
+ordered-float = "2.7.0"
 rustfft = { version = "6.0.1", default-features = false }
 zbar-rust = "0.0.18"
 

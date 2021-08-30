@@ -1,44 +1,5 @@
-fn get_buckets() -> [[usize; 4]; 7] {
-    let mut ret = [[0; 4]; 7];
-    let mut freq = 830;
-    for b in &mut ret {
-        for x in b {
-            *x = freq / 10;
-            freq += 87;
-        }
-    }
-    dbg!(freq);
-    ret
-}
-
-fn encode_bucket(x: usize) -> [f32; 4] {
-    assert!(x < 4);
-    match x {
-        0 => [1.0, 0.0, 0.0, 0.0],
-        1 => [0.0, 1.0, 0.0, 0.0],
-        2 => [0.0, 0.0, 1.0, 0.0],
-        3 => [0.0, 0.0, 0.0, 1.0],
-        _ => unreachable!(),
-    }
-}
-
-fn encode_number(x: usize) -> [[f32; 4]; 7] {
-    assert!(x < 4096);
-    let mut cfs = [[0.0f32; 4]; 7];
-    cfs[0] = encode_bucket((x & 0b000000000011) >> 0);
-    cfs[1] = encode_bucket((x & 0b000000001100) >> 2);
-    cfs[2] = encode_bucket((x & 0b000000110000) >> 4);
-    cfs[3] = encode_bucket((x & 0b000011000000) >> 6);
-    cfs[4] = encode_bucket((x & 0b001100000000) >> 8);
-    cfs[5] = encode_bucket((x & 0b110000000000) >> 10);
-
-    let parity = (x & 0b101010101010).count_ones() & 1 | ((x & 0b010101010101).count_ones() & 1 << 1);
-    cfs[6] = encode_bucket(parity as usize);
-    cfs
-}
-
 fn main() {
-    let buckets = asyncmeasure::chirps::get_buckets();
+    let buckets = desyncmeasure::chirps::get_buckets();
 
     let zeroes = [0.0f32; 800];
 
@@ -49,7 +10,7 @@ fn main() {
 
     for x in 0..4096 {
         let mut coefs = [num_complex::Complex32::new(0.0, 0.0); 800];
-        let data = encode_number(x);
+        let data = desyncmeasure::chirps::encode_number(x);
         for (bn, n) in IntoIterator::into_iter(data).enumerate() {
             for (sn, sv) in IntoIterator::into_iter(n).enumerate() {
                 let f = buckets[bn][sn];
