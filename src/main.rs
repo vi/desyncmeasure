@@ -10,7 +10,7 @@ struct VideoData {
     // decoder: bardecoder::Decoder<image::DynamicImage,image::GrayImage>,
     decoder: zbar_rust::ZBarImageScanner,
     encountered_stamps: std::collections::HashSet<u32>,
-    minimal_otc : u32,
+    minimal_ots : u32,
 
 }
 
@@ -43,10 +43,6 @@ impl mkv::events::MatroskaEventHandler for Handler {
                 }
                 let tc_s = f.timecode_nanoseconds as f64 / 1000_000_000.0;
 
-                if tc_s < self.baseline_tc {
-                    self.baseline_tc = tc_s;
-                }
-
                 //let img  = image::ImageBuffer::<image::Luma<u8>,_>::from_vec(v.width as u32, v.heigth as u32, buf).unwrap();
                 //let img = image::DynamicImage::ImageLuma8(img);
 
@@ -58,15 +54,19 @@ impl mkv::events::MatroskaEventHandler for Handler {
                             println!("{} V {}", (ots as f32)/10.0, tc_s);
                             v.encountered_stamps.insert(ots);
 
-                            if ots < v.minimal_otc {
-                                v.minimal_otc = ots;
+                            if ots < v.minimal_ots {
+                                v.minimal_ots = ots;
                             }
 
-                            //dbg!(v.minimal_otc, self.baseline_tc, ots, tc_s);
+                            if tc_s < self.baseline_tc {
+                                self.baseline_tc = tc_s;
+                            }
+
+                            //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
                             println!(
                                 "{} dV {}",
                                 (ots as f32)/10.0,
-                                (tc_s - self.baseline_tc) - ((ots - v.minimal_otc) as f64)/10.0,
+                                (tc_s - self.baseline_tc) - ((ots - v.minimal_ots) as f64)/10.0,
                             );
                         }
                     }
@@ -190,7 +190,7 @@ impl mkv::events::MatroskaEventHandler for Handler {
                                         heigth: h as usize,
                                         decoder : zbar_rust::ZBarImageScanner::new(), //bardecoder::default_decoder(),
                                         encountered_stamps: std::collections::HashSet::with_capacity(1024),
-                                        minimal_otc: u32::MAX,
+                                        minimal_ots: u32::MAX,
                                     });
                                 }
                                 _ => {
