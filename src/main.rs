@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use mkv::elements::parser::Parser as _;
 use std::{collections::VecDeque, convert::TryInto, io::Read};
 
@@ -15,7 +13,6 @@ struct VideoData {
     track: usize,
     // decoder: bardecoder::Decoder<image::DynamicImage,image::GrayImage>,
     decoder: zbar_rust::ZBarImageScanner,
-    minimal_ots : u32,
 }
 
 const AUDIO_MINIBLOCK_SIZE : usize = 200*4;
@@ -24,7 +21,6 @@ const AUDIO_MINIBLOCK_COUNT: usize = (800*4) / AUDIO_MINIBLOCK_SIZE;
 struct AudioData {
     track: usize,
 
-    minimal_ots : u32,
     debt: Vec<u8>,
     miniblocks : VecDeque<(f64,Vec<u8>)>,
 
@@ -38,6 +34,103 @@ struct EncountreedStampData {
     delta_reported: bool,
 }
 
+struct DataCollector {
+    video_minimal_ots : u32,
+    audio_minimal_ots : u32,
+    
+    encountered_stamps: std::collections::HashMap<u32, EncountreedStampData>,
+    baseline_pts: f64,
+
+    video_finished: bool,
+    audio_finished: bool,
+}
+
+enum MessageToDataCollector {
+    VideoTs{pts: f64, ots: u32},
+    AudioTs{pts: f64, ots: u32},
+    VideoFinished,
+    AudioFinished,
+}
+
+impl DataCollector {
+    fn new() -> DataCollector {
+        DataCollector {
+            audio_minimal_ots : u32::MAX,
+            video_minimal_ots: u32::MAX,
+            encountered_stamps: Default::default(),
+            baseline_pts: f64::INFINITY,
+            video_finished: false,
+            audio_finished: false,
+        }
+    }
+
+    fn start_agent(mut self) -> (flume::Sender<MessageToDataCollector>, std::thread::JoinHandle<()>) {
+        let (tx,rx) = flume::unbounded();
+        let jh = std::thread::spawn(move || {
+            for msg in rx {
+                use MessageToDataCollector::*;
+                match msg {
+                    VideoFinished => self.video_finished = true,
+                    AudioFinished => self.audio_finished = true,
+                    VideoTs { pts, ots } => {
+                        let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
+                        if enc_tss.video_ts.is_none() {
+                            println!("{} aV {:.3}", (ots as f32)/10.0, pts);
+                            enc_tss.video_ts = Some(pts);
+        
+                            if ots < self.video_minimal_ots {
+                                self.video_minimal_ots = ots;
+                            }
+        
+                            if pts < self.baseline_pts {
+                                self.baseline_pts = pts;
+                            }
+        
+                            //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
+                            println!(
+                                "{} dV {:.3}",
+                                (ots as f32)/10.0,
+                                (pts - self.baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
+                            );
+        
+                            enc_tss.maybe_print_delta(ots);
+                        }
+                    }
+                    AudioTs { pts, ots } => {
+                        let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
+                        if enc_tss.audio_ts.is_none() {
+                            println!("{} aA {:.3}", (ots as f32) / 10.0, pts);
+                            enc_tss.audio_ts = Some(pts);
+                        
+
+                            if ots < self.audio_minimal_ots {
+                                self.audio_minimal_ots = ots;
+                            }
+
+                            if pts < self.baseline_pts {
+                                self.baseline_pts = pts;
+                            }
+
+                            //dbg!(a.minimal_ots, self.baseline_tc, ots, tc_s);
+                            println!(
+                                "{} dA {:.3}",
+                                (ots as f32)/10.0,
+                                (pts - self.baseline_pts) - ((ots - self.audio_minimal_ots) as f64)/10.0,
+                            );
+                            enc_tss.maybe_print_delta(ots);
+                        }
+                    }
+                }
+                if self.video_finished && self.audio_finished {
+                    break;
+                }
+            }
+        });
+        (tx, jh)
+    }
+}
+
+
 impl EncountreedStampData {
     fn maybe_print_delta(&mut self, ots: u32) {
         if ! self.delta_reported && self.video_ts.is_some() && self.audio_ts.is_some() {
@@ -50,23 +143,21 @@ impl EncountreedStampData {
 struct Handler {
     video: Option<VideoData>,
     audio: Option<AudioData>,
-    encountered_stamps: std::collections::HashMap<u32, EncountreedStampData>,
-    baseline_tc: f64,
+    data_collector: flume::Sender<MessageToDataCollector>,
 }
 
 impl Handler {
-    pub fn new() -> Self {
+    pub fn new(dc: flume::Sender<MessageToDataCollector>) -> Self {
         Self {
             video: None,
             audio: None,
-            baseline_tc: f64::INFINITY,
-            encountered_stamps: std::collections::HashMap::with_capacity(1024),
+            data_collector: dc,
         }
     }
 }
 
 impl Handler {
-    fn process_video(&mut self, mut f: mkv::events::MatroskaFrame) {
+    fn process_video(&mut self, f: mkv::events::MatroskaFrame) {
         let v = self.video.as_mut().unwrap();
         if f.buffers.len() != 1 {
             log::error!("Unexpected number of laced frames. Should be sole unlaced buffer.");
@@ -86,33 +177,12 @@ impl Handler {
         for qr in v.decoder.scan_y800(&buf, v.width as u32, v.heigth as u32).unwrap() {
             if qr.data.len() == 4 && qr.data.iter().all(|x| *x >= b'0' && *x <= b'9') {
                 let ots : u32 = String::from_utf8_lossy(&qr.data[..]).parse().unwrap();
-                let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
-                if enc_tss.video_ts.is_none() {
-                    println!("{} aV {:.3}", (ots as f32)/10.0, tc_s);
-                    enc_tss.video_ts = Some(tc_s);
-
-                    if ots < v.minimal_ots {
-                        v.minimal_ots = ots;
-                    }
-
-                    if tc_s < self.baseline_tc {
-                        self.baseline_tc = tc_s;
-                    }
-
-                    //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
-                    println!(
-                        "{} dV {:.3}",
-                        (ots as f32)/10.0,
-                        (tc_s - self.baseline_tc) - ((ots - v.minimal_ots) as f64)/10.0,
-                    );
-
-                    enc_tss.maybe_print_delta(ots);
-                }
+                self.data_collector.send(MessageToDataCollector::VideoTs{pts: tc_s, ots}).unwrap();
             }
         }
     }
 
-    fn process_audio(&mut self, mut f : mkv::events::MatroskaFrame) {
+    fn process_audio(&mut self, f : mkv::events::MatroskaFrame) {
         let a = self.audio.as_mut().unwrap();
 
         if f.buffers.len() != 1 {
@@ -160,31 +230,10 @@ impl Handler {
             }
             assert_eq!(block.len(), 800);
 
-            if let Some(mut the_num) = a.analyzer.analyze_block(ts, block) {
+            if let Some(the_num) = a.analyzer.analyze_block(ts, block) {
                 let ots = the_num as u32 * 2;
 
-                let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
-                if enc_tss.audio_ts.is_none() {
-                    println!("{} aA {:.3}", (ots as f32) / 10.0, ts);
-                    enc_tss.audio_ts = Some(ts);
-                
-
-                    if ots < a.minimal_ots {
-                        a.minimal_ots = ots;
-                    }
-
-                    if ts < self.baseline_tc {
-                        self.baseline_tc = ts;
-                    }
-
-                    //dbg!(a.minimal_ots, self.baseline_tc, ots, tc_s);
-                    println!(
-                        "{} dA {:.3}",
-                        (ots as f32)/10.0,
-                        (tc_s - self.baseline_tc) - ((ots - a.minimal_ots) as f64)/10.0,
-                    );
-                    enc_tss.maybe_print_delta(ots);
-                }
+                self.data_collector.send(MessageToDataCollector::AudioTs{pts: ts, ots}).unwrap();
             }
 
             a.miniblocks.pop_front();
@@ -196,7 +245,7 @@ impl Handler {
 }
 
 impl mkv::events::MatroskaEventHandler for Handler {
-    fn frame_encountered(&mut self, mut f: mkv::events::MatroskaFrame) {
+    fn frame_encountered(&mut self,  f: mkv::events::MatroskaFrame) {
         if self.video.is_none() && self.audio.is_none() {
             log::error!("No suitable audio or video tracks found");
         }
@@ -338,7 +387,7 @@ impl mkv::events::MatroskaEventHandler for Handler {
                             match (width, height) {
                                 (Some(w), Some(h)) => {
                                     log::info!("Video track {}x{} at track number {}", w,h,tn);
-                                    if (w > 1000 || h > 1000) {
+                                    if w > 1000 || h > 1000 {
                                         log::warn!("Too large video. Consider downscaling it");
                                     }
                                     if self.video.is_some() {
@@ -350,7 +399,6 @@ impl mkv::events::MatroskaEventHandler for Handler {
                                         width: w as usize,
                                         heigth: h as usize,
                                         decoder : zbar_rust::ZBarImageScanner::new(), //bardecoder::default_decoder(),
-                                        minimal_ots: u32::MAX,
                                     });
                                 }
                                 _ => {
@@ -380,6 +428,16 @@ impl mkv::events::MatroskaEventHandler for Handler {
                                     continue;
                                 }
                             }
+                            match samplerate {
+                                None => log::error!("No Channels info in audio track"),
+                                Some(c) if c > 7999.0 && c < 8001.0 => {
+                                    // OK
+                                }
+                                Some(_) => {
+                                    log::error!("Audio sample rate should be 8000 Hz.");
+                                    continue;
+                                }
+                            }
                             match samplebits {
                                 None => log::error!("No BitDepth info in audio track"),
                                 Some(32) => (),
@@ -399,7 +457,6 @@ impl mkv::events::MatroskaEventHandler for Handler {
                                 debt: Vec::with_capacity(800),
                                 miniblocks: VecDeque::with_capacity(AUDIO_MINIBLOCK_COUNT),
                                 analyzer: desyncmeasure::chirps::ChirpAnalyzer::new(),
-                                minimal_ots: u32::MAX,
                             });
 
                         }
@@ -456,7 +513,11 @@ fn main() -> anyhow::Result<()> {
     let mut si = si.lock();
     //let si = std::io::BufReader::with_capacity(80_000, si);
 
-    let h = Handler::new();
+    let dc = DataCollector::new();
+    let (dctx, dch) = dc.start_agent();
+    let dctx2 = dctx.clone();
+
+    let h = Handler::new(dctx);
     let hl_p = mkv::events::MatroskaDemuxer::new(h);
     let mut ml_p = mkv::elements::midlevel::MidlevelParser::new(hl_p);
     let mut ll_p = mkv::elements::parser::new();
@@ -469,7 +530,11 @@ fn main() -> anyhow::Result<()> {
 
         ll_p.feed_bytes(buf, &mut ml_p);
     }
+
+    dctx2.send(MessageToDataCollector::AudioFinished).unwrap();
+    dctx2.send(MessageToDataCollector::VideoFinished).unwrap();
     
+    dch.join().unwrap();
 
     Ok(())
 }
