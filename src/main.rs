@@ -5,6 +5,16 @@ use std::{collections::VecDeque, convert::TryInto, io::Read};
 struct Opts {
     #[options(no_help_flag)]
     help: bool,
+
+    #[options(default = "1")]
+    threads: usize,
+}
+
+struct MessageToVideoDecoder {
+    pts: f64,
+    buf: Vec<u8>,
+    width: u32,
+    height: u32,
 }
 
 struct VideoData {
@@ -12,7 +22,8 @@ struct VideoData {
     heigth: usize,
     track: usize,
     // decoder: bardecoder::Decoder<image::DynamicImage,image::GrayImage>,
-    decoder: zbar_rust::ZBarImageScanner,
+    // decoder: zbar_rust::ZBarImageScanner,
+    decoder_tx: flume::Sender<MessageToVideoDecoder>,
 }
 
 const AUDIO_MINIBLOCK_SIZE : usize = 200*4;
@@ -41,60 +52,50 @@ struct DataCollector {
     encountered_stamps: std::collections::HashMap<u32, EncountreedStampData>,
     baseline_pts: f64,
 
-    video_finished: bool,
+    video_threads_active: usize,
     audio_finished: bool,
+
+    threads_for_video: usize,
 }
 
 enum MessageToDataCollector {
     VideoTs{pts: f64, ots: u32},
     AudioTs{pts: f64, ots: u32},
-    VideoFinished,
+    VideoThreadFinished,
+    VideoThreadStarted,
     AudioFinished,
 }
 
 impl DataCollector {
-    fn new() -> DataCollector {
+    fn new(threads_for_video: usize) -> DataCollector {
         DataCollector {
             audio_minimal_ots : u32::MAX,
             video_minimal_ots: u32::MAX,
             encountered_stamps: Default::default(),
             baseline_pts: f64::INFINITY,
-            video_finished: false,
+            video_threads_active: 0,
             audio_finished: false,
+            threads_for_video,
         }
     }
 
     fn start_agent(mut self) -> (flume::Sender<MessageToDataCollector>, std::thread::JoinHandle<()>) {
         let (tx,rx) = flume::unbounded();
         let jh = std::thread::spawn(move || {
+            let max_video_msg = if self.threads_for_video == 1 {
+                1
+            } else {
+                2 * self.threads_for_video
+            };
+            let mut video_msg_sorter = std::collections::BinaryHeap::with_capacity(max_video_msg);
             for msg in rx {
                 use MessageToDataCollector::*;
                 match msg {
-                    VideoFinished => self.video_finished = true,
+                    VideoThreadStarted => self.video_threads_active += 1,
+                    VideoThreadFinished => self.video_threads_active -= 1,
                     AudioFinished => self.audio_finished = true,
                     VideoTs { pts, ots } => {
-                        let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
-                        if enc_tss.video_ts.is_none() {
-                            println!("{} aV {:.3}", (ots as f32)/10.0, pts);
-                            enc_tss.video_ts = Some(pts);
-        
-                            if ots < self.video_minimal_ots {
-                                self.video_minimal_ots = ots;
-                            }
-        
-                            if pts < self.baseline_pts {
-                                self.baseline_pts = pts;
-                            }
-        
-                            //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
-                            println!(
-                                "{} dV {:.3}",
-                                (ots as f32)/10.0,
-                                (pts - self.baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
-                            );
-        
-                            enc_tss.maybe_print_delta(ots);
-                        }
+                        video_msg_sorter.push((std::cmp::Reverse(ordered_float::OrderedFloat(pts)),ots));
                     }
                     AudioTs { pts, ots } => {
                         let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
@@ -121,7 +122,35 @@ impl DataCollector {
                         }
                     }
                 }
-                if self.video_finished && self.audio_finished {
+                let exiting = self.video_threads_active == 0 && self.audio_finished;
+
+                while video_msg_sorter.len() >= max_video_msg || (video_msg_sorter.len() > 0 && exiting) {
+                    let (std::cmp::Reverse(ordered_float::OrderedFloat( pts)), ots) = video_msg_sorter.pop().unwrap();
+                    let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
+                        if enc_tss.video_ts.is_none() {
+                            println!("{} aV {:.3}", (ots as f32)/10.0, pts);
+                            enc_tss.video_ts = Some(pts);
+        
+                            if ots < self.video_minimal_ots {
+                                self.video_minimal_ots = ots;
+                            }
+        
+                            if pts < self.baseline_pts {
+                                self.baseline_pts = pts;
+                            }
+        
+                            //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
+                            println!(
+                                "{} dV {:.3}",
+                                (ots as f32)/10.0,
+                                (pts - self.baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
+                            );
+        
+                            enc_tss.maybe_print_delta(ots);
+                        }
+                }
+
+                if exiting {
                     break;
                 }
             }
@@ -144,16 +173,44 @@ struct Handler {
     video: Option<VideoData>,
     audio: Option<AudioData>,
     data_collector: flume::Sender<MessageToDataCollector>,
+    threads_for_video: usize,
 }
 
 impl Handler {
-    pub fn new(dc: flume::Sender<MessageToDataCollector>) -> Self {
+    pub fn new(dc: flume::Sender<MessageToDataCollector>, threads_for_video: usize) -> Self {
         Self {
             video: None,
             audio: None,
             data_collector: dc,
+            threads_for_video,
         }
     }
+}
+
+fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDataCollector>) -> flume::Sender<MessageToVideoDecoder> {
+    let (tx,rx) = flume::bounded(num_threads);
+
+    for _ in 0..num_threads {
+        let rx = rx.clone();
+        let data_collector = data_collector.clone();
+        std::thread::spawn(move || {
+            let mut decoder = zbar_rust::ZBarImageScanner::new();
+            data_collector.send(MessageToDataCollector::VideoThreadStarted).unwrap();
+            for msg in rx {
+                let msg : MessageToVideoDecoder = msg;
+                if msg.buf.len() == 0 { break }
+                for qr in decoder.scan_y800(&msg.buf, msg.width, msg.height).unwrap() {
+                    if qr.data.len() == 4 && qr.data.iter().all(|x| *x >= b'0' && *x <= b'9') {
+                        let ots : u32 = String::from_utf8_lossy(&qr.data[..]).parse().unwrap();
+                        data_collector.send(MessageToDataCollector::VideoTs{pts: msg.pts, ots}).unwrap();
+                    }
+                }
+            }
+            data_collector.send(MessageToDataCollector::VideoThreadFinished).unwrap();
+        });
+    }
+
+    tx
 }
 
 impl Handler {
@@ -170,16 +227,17 @@ impl Handler {
         }
         let tc_s = f.timecode_nanoseconds as f64 / 1000_000_000.0;
 
+        v.decoder_tx.send(MessageToVideoDecoder{
+            pts: tc_s,
+            buf,
+            width: v.width as u32,
+            height: v.heigth as u32,
+        }).unwrap();
+
         //let img  = image::ImageBuffer::<image::Luma<u8>,_>::from_vec(v.width as u32, v.heigth as u32, buf).unwrap();
         //let img = image::DynamicImage::ImageLuma8(img);
 
         //for qr in v.decoder.decode(&img) {
-        for qr in v.decoder.scan_y800(&buf, v.width as u32, v.heigth as u32).unwrap() {
-            if qr.data.len() == 4 && qr.data.iter().all(|x| *x >= b'0' && *x <= b'9') {
-                let ots : u32 = String::from_utf8_lossy(&qr.data[..]).parse().unwrap();
-                self.data_collector.send(MessageToDataCollector::VideoTs{pts: tc_s, ots}).unwrap();
-            }
-        }
     }
 
     fn process_audio(&mut self, f : mkv::events::MatroskaFrame) {
@@ -398,7 +456,8 @@ impl mkv::events::MatroskaEventHandler for Handler {
                                         track: tn as usize,
                                         width: w as usize,
                                         heigth: h as usize,
-                                        decoder : zbar_rust::ZBarImageScanner::new(), //bardecoder::default_decoder(),
+                                        //decoder : zbar_rust::ZBarImageScanner::new(), //bardecoder::default_decoder(),
+                                        decoder_tx: video_decoders(self.threads_for_video, self.data_collector.clone()),
                                     });
                                 }
                                 _ => {
@@ -513,26 +572,26 @@ fn main() -> anyhow::Result<()> {
     let mut si = si.lock();
     //let si = std::io::BufReader::with_capacity(80_000, si);
 
-    let dc = DataCollector::new();
+    let dc = DataCollector::new(opts.threads);
     let (dctx, dch) = dc.start_agent();
     let dctx2 = dctx.clone();
 
-    let h = Handler::new(dctx);
-    let hl_p = mkv::events::MatroskaDemuxer::new(h);
-    let mut ml_p = mkv::elements::midlevel::MidlevelParser::new(hl_p);
-    let mut ll_p = mkv::elements::parser::new();
+    {
+        let h = Handler::new(dctx, opts.threads);
+        let hl_p = mkv::events::MatroskaDemuxer::new(h);
+        let mut ml_p = mkv::elements::midlevel::MidlevelParser::new(hl_p);
+        let mut ll_p = mkv::elements::parser::new();
+        
+        let mut buf = vec![0; 79872];
+        loop {
+            let len = si.read(&mut buf[..])?;
+            if len == 0 { break }
+            let buf = &buf[0..len];
     
-    let mut buf = vec![0; 79872];
-    loop {
-        let len = si.read(&mut buf[..])?;
-        if len == 0 { break }
-        let buf = &buf[0..len];
-
-        ll_p.feed_bytes(buf, &mut ml_p);
+            ll_p.feed_bytes(buf, &mut ml_p);
+        }
     }
-
     dctx2.send(MessageToDataCollector::AudioFinished).unwrap();
-    dctx2.send(MessageToDataCollector::VideoFinished).unwrap();
     
     dch.join().unwrap();
 
