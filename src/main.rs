@@ -3,6 +3,12 @@
 use mkv::elements::parser::Parser as _;
 use std::{collections::VecDeque, convert::TryInto, io::Read};
 
+#[derive(gumdrop::Options)]
+struct Opts {
+    #[options(no_help_flag)]
+    help: bool,
+}
+
 struct VideoData {
     width: usize,
     heigth: usize,
@@ -431,7 +437,8 @@ Element { class: Tracks, content: Master([
 
 
 fn main() -> anyhow::Result<()> {
-    if std::env::args().nth(1   ) == Some("--help".to_owned()) {
+    let opts : Opts = gumdrop::Options::parse_args_default_or_exit();
+    if opts.help {
         println!("Analyse video for audio-video desynchronisation.");
         println!("This tool can only analyse one specific video (or its parts):");
         println!("    https://vi-server.org/pub/av_sync.mkv");
@@ -441,6 +448,7 @@ fn main() -> anyhow::Result<()> {
         println!("  a{{V,A}} - receive timestamp against send {{video,audio}} timestamp. ");
         println!("  d{{V,A}} - Relative {{video,audio}} delay. ");
         println!("  De - A/V desyncronisation again send timestamp");
+        println!("{}", <Opts as gumdrop::Options>::usage());
         return Ok(());
     }
     env_logger::init();
