@@ -78,7 +78,7 @@ impl Handler {
 
         //for qr in v.decoder.decode(&img) {
         for qr in v.decoder.scan_y800(&buf, v.width as u32, v.heigth as u32).unwrap() {
-            if qr.data.iter().all(|x| *x >= b'0' && *x <= b'9') {
+            if qr.data.len() == 4 && qr.data.iter().all(|x| *x >= b'0' && *x <= b'9') {
                 let ots : u32 = String::from_utf8_lossy(&qr.data[..]).parse().unwrap();
                 let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
                 if enc_tss.video_ts.is_none() {
