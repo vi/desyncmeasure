@@ -48,6 +48,8 @@ struct EncountreedStampData {
 struct DataCollector {
     video_minimal_ots : u32,
     audio_minimal_ots : u32,
+
+    ots_rachet: u32,
     
     encountered_stamps: std::collections::HashMap<u32, EncountreedStampData>,
     baseline_pts: f64,
@@ -56,6 +58,8 @@ struct DataCollector {
     audio_finished: bool,
 
     threads_for_video: usize,
+    ots_rachet_spike_charge: f32,
+    epoch: u32,
 }
 
 enum MessageToDataCollector {
@@ -76,7 +80,49 @@ impl DataCollector {
             video_threads_active: 0,
             audio_finished: false,
             threads_for_video,
+            ots_rachet: 0,
+            epoch: 0,
+            ots_rachet_spike_charge: 0.0,
         }
+    }
+
+    fn process_ots_wraparound(&mut self, ots: u32) -> u32 {
+        let mut ots = ots as i32;
+        if ots < self.ots_rachet as i32 {
+            ots += 8192;
+        }
+
+        if ots > self.ots_rachet as i32 + 4096 {
+            ots -= 8192
+        }
+
+        if ots > 2048 &&  ots > self.ots_rachet as i32 + 2048  {
+            let ots = ots as u32;
+            if ots > self.ots_rachet + 2048 + 100 {
+                // maybe outliner
+                self.ots_rachet_spike_charge += 1.0;
+
+                if self.ots_rachet_spike_charge > 4.0 {
+                    self.ots_rachet_spike_charge = 0.0;
+                    self.ots_rachet = ots - 2048;
+                }
+            } else {
+                self.ots_rachet = ots - 2048;
+                self.ots_rachet_spike_charge *= 0.7;
+            }
+        } else {
+            self.ots_rachet_spike_charge *= 0.4;
+        }
+
+        ots += self.epoch as i32 * 8192;
+        
+        if self.ots_rachet >= 8192 {
+            self.ots_rachet = 0;
+            self.epoch += 1;
+        }
+
+
+        ots as u32
     }
 
     fn start_agent(mut self) -> (flume::Sender<MessageToDataCollector>, std::thread::JoinHandle<()>) {
@@ -98,6 +144,7 @@ impl DataCollector {
                         video_msg_sorter.push((std::cmp::Reverse(ordered_float::OrderedFloat(pts)),ots));
                     }
                     AudioTs { pts, ots } => {
+                        let ots = self.process_ots_wraparound(ots);
                         let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
                         if enc_tss.audio_ts.is_none() {
                             println!("{} aA {:.3}", (ots as f32) / 10.0, pts);
@@ -126,28 +173,29 @@ impl DataCollector {
 
                 while video_msg_sorter.len() >= max_video_msg || (video_msg_sorter.len() > 0 && exiting) {
                     let (std::cmp::Reverse(ordered_float::OrderedFloat( pts)), ots) = video_msg_sorter.pop().unwrap();
+                    let ots = self.process_ots_wraparound(ots);
                     let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
-                        if enc_tss.video_ts.is_none() {
-                            println!("{} aV {:.3}", (ots as f32)/10.0, pts);
-                            enc_tss.video_ts = Some(pts);
-        
-                            if ots < self.video_minimal_ots {
-                                self.video_minimal_ots = ots;
-                            }
-        
-                            if pts < self.baseline_pts {
-                                self.baseline_pts = pts;
-                            }
-        
-                            //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
-                            println!(
-                                "{} dV {:.3}",
-                                (ots as f32)/10.0,
-                                (pts - self.baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
-                            );
-        
-                            enc_tss.maybe_print_delta(ots);
+                    if enc_tss.video_ts.is_none() {
+                        println!("{} aV {:.3}", (ots as f32)/10.0, pts);
+                        enc_tss.video_ts = Some(pts);
+    
+                        if ots < self.video_minimal_ots {
+                            self.video_minimal_ots = ots;
                         }
+    
+                        if pts < self.baseline_pts {
+                            self.baseline_pts = pts;
+                        }
+    
+                        //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
+                        println!(
+                            "{} dV {:.3}",
+                            (ots as f32)/10.0,
+                            (pts - self.baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
+                        );
+    
+                        enc_tss.maybe_print_delta(ots);
+                    }
                 }
 
                 if exiting {
