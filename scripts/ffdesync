@@ -1,0 +1,2 @@
+#!/bin/sh
+ffmpeg -v panic -i "$1" -pix_fmt gray -vf "scale='min(iw,1200)':-1" -c:v rawvideo  -c:a pcm_f32le -ar 8000 -ac 1 -f matroska - | target/release/desyncmeasure -t 4

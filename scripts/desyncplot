@@ -1,0 +1,65 @@
+#!/bin/sh
+sort -n | \
+perl -wne '
+    our $last_delay;
+    our $last_da;
+    our $last_dv;
+    if(/^(\S+) (\S+) (\S+)/) {
+        my $ots = $1;
+        my $typ = $2;
+        my $pts = $3;
+        if ($typ eq "aV") {
+            printf "%s V 1 0 1 0\n",$ots;
+        } elsif ($typ eq "aA") {
+            printf "%s A 2 1 2 1\n",$ots;
+        } elsif ($typ eq "dA") {
+            if (defined($last_da)) {
+                if (($ots - $last_da) > 0.5) {
+                    print (($last_da+0.2) . " dA NaN\n");
+                }
+            }
+            print ("$ots $typ ".($pts+1)."\n");
+            $last_da = $ots;
+        } elsif ($typ eq "dV") {
+            if (defined($last_dv)) {
+                if (($ots - $last_dv) > 0.5) {
+                    print (($last_dv+0.2) . " dV NaN\n");
+                }
+            }
+            print "$ots $typ ".($pts-1)."\n";
+            $last_dv = $ots;
+        } elsif ($typ eq "De") {
+            if (defined($last_delay)) {
+                if (($ots - $last_delay) > 0.5) {
+                    print (($last_delay+0.2) . " De NaN\n");
+                    print (($last_delay+0.2) . " De2 NaN\n");
+                }
+            }
+            print "$ots $typ $pts\n";
+            print "$ots De2 $pts\n";
+            $last_delay = $ots;
+        } else {
+            print "$ots $typ $pts\n";
+        }
+    }
+' |  \
+feedgnuplot  --autolegend --dataid --domain --y2 aV --y2 aA \
+  --curvestyle De 'with filledcurves y=0 fc rgb 0xC0FF0000' \
+  --curvestyle De2 'with lines lc rgb 0x00FF0000 lw 2' \
+  --curvestyle dA 'with lines lc rgb 0x008000' \
+  --curvestyle dV 'with lines lc rgb "blue"' \
+  --curvestyle A 'with candlesticks fc rgb 0xC0008000' \
+  --curvestyle V 'with candlesticks fc rgb 0xC00000FF' \
+  --rangesize A 4   \
+  --rangesize V 4   \
+  --set 'boxwidth 0.2' \
+  --y2min 0 \
+  --y2max 50 \
+  --y2 A \
+  --y2 V \
+  --ymin -4 \
+  --ymax 4 \
+   --extracmds 'unset y2tics;' \
+   --extracmds 'set ytics 0.2;' \
+   --extracmds 'set xtics autofreq;' \
+  "$@"
