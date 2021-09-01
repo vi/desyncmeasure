@@ -279,6 +279,17 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                     for qr in decoder.scan_y800(&msg.buf, msg.width, msg.height).unwrap() {
                         decoded_code_handler(&qr.data);
                     }
+                    let hw = msg.width as usize / 2;
+                    let hh = msg.height as usize / 2;
+                    let mut downscaled = vec![0u8; hw as usize*hh as usize];
+                    for y in 0..hh {
+                        for x in 0..hw {
+                            downscaled[y*hw + x] = msg.buf[2*y*msg.width as usize + 2*x];
+                        }
+                    }
+                    for qr in decoder.scan_y800(&downscaled, hw as u32, hh as u32).unwrap() {
+                        decoded_code_handler(&qr.data);
+                    }
                 }
             }
             data_collector.send(MessageToDataCollector::VideoThreadFinished).unwrap();
