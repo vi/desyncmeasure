@@ -220,7 +220,9 @@ dependencies = [
 
 [[package]]
 name = "mkv"
-version = "0.0.7"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd261e87b325127204d92aa171e980a9638aeb988d3d6f8d6ea6edb671515bb6"
 dependencies = [
  "byteorder 0.3.13",
  "bytes",
