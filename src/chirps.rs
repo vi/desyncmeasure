@@ -24,18 +24,26 @@ fn encode_bucket(x: usize) -> [f32; 4] {
     }
 }
 
+pub fn number_indexes(mut x: usize) -> [usize; 7] {
+    assert!(x < 4096);
+    let mut idxs = [0; 7];
+    let mut parity = 0;
+    for i in 0..=5 {
+        idxs[i] = x & 0b11;
+        parity ^= x & 0b11;
+        x >>= 2;
+    }
+    idxs[6] = parity;
+    idxs
+}
+
 pub fn encode_number(x: usize) -> [[f32; 4]; 7] {
     assert!(x < 4096);
+    let idxs = number_indexes(x);
     let mut cfs = [[0.0f32; 4]; 7];
-    cfs[0] = encode_bucket((x & 0b000000000011) >> 0);
-    cfs[1] = encode_bucket((x & 0b000000001100) >> 2);
-    cfs[2] = encode_bucket((x & 0b000000110000) >> 4);
-    cfs[3] = encode_bucket((x & 0b000011000000) >> 6);
-    cfs[4] = encode_bucket((x & 0b001100000000) >> 8);
-    cfs[5] = encode_bucket((x & 0b110000000000) >> 10);
-
-    let parity = (x & 0b101010101010).count_ones() & 1 | ((x & 0b010101010101).count_ones() & 1 << 1);
-    cfs[6] = encode_bucket(parity as usize);
+    for i in 0..=6 {
+        cfs[i] = encode_bucket(idxs[i]);
+    }
     cfs
 }
 
@@ -102,9 +110,10 @@ impl ChirpAnalyzer {
             multiplier *= 4;
         }
         //print!("QQQ {} {:?}  q {}", _ts, indexes, signal_quality);
-        let parity = (the_num & 0b101010101010).count_ones() & 1 | ((the_num & 0b010101010101).count_ones() & 1 << 1);
+        let canonical_indexes_for_this_number = number_indexes(the_num);
+
         //print!(" p {} the_num {}", parity, the_num);
-        if indexes[6] != parity as usize {
+        if indexes[6] != canonical_indexes_for_this_number[6] {
             signal_quality = 0.0;
         }
         //println!(" q {}", signal_quality);

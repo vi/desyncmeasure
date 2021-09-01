@@ -21,7 +21,7 @@ fn main() {
         }
         fft.process(&mut coefs);
         for i in 0..800 {
-            let mut v = coefs[i].re * 0.01;
+            let mut v = coefs[i].re * 0.04;
             if i < 10 { v *= ((i+1) as f32)/10.0}
             if i >= 790  { v *= ((800-i) as f32)/10.0}
             audio_data.push(v);

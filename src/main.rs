@@ -200,10 +200,16 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                 let msg : MessageToVideoDecoder = msg;
                 if msg.buf.len() == 0 { break }
                 for qr in decoder.scan_y800(&msg.buf, msg.width, msg.height).unwrap() {
-                    if qr.data.len() == 4 && qr.data.iter().all(|x| *x >= b'0' && *x <= b'9') {
-                        let ots : u32 = String::from_utf8_lossy(&qr.data[..]).parse().unwrap();
-                        data_collector.send(MessageToDataCollector::VideoTs{pts: msg.pts, ots}).unwrap();
-                    }
+                    if qr.data.len() != 4+4+1 { continue; }
+                    if ! qr.data[0..4].iter().all(|x| *x >= b'0' && *x <= b'9') { continue; }
+                    if qr.data[4] != b' ' { continue; }
+                    if ! qr.data[5..9].iter().all(|x| *x >= b'0' && *x <= b'9') { continue; }
+
+                    let ots : u32 = String::from_utf8_lossy(&qr.data[0..4]).parse().unwrap();
+                    let ots2 : u32 = String::from_utf8_lossy(&qr.data[5..9]).parse().unwrap();
+
+                    if ots+ots2 != 8192 { continue; }
+                    data_collector.send(MessageToDataCollector::VideoTs{pts: msg.pts, ots}).unwrap();
                 }
             }
             data_collector.send(MessageToDataCollector::VideoThreadFinished).unwrap();
