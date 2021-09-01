@@ -251,6 +251,8 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                 let msg : MessageToVideoDecoder = msg;
                 if msg.buf.len() == 0 { break }
 
+                let pts = msg.pts;
+
                 let decoded_code_handler = |qr:&[u8]| {
                     if qr.len() != 4+4+1 { return; }
                     if ! qr[0..4].iter().all(|x| *x >= b'0' && *x <= b'9') { return; }
@@ -261,7 +263,7 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                     let ots2 : u32 = String::from_utf8_lossy(&qr[5..9]).parse().unwrap();
 
                     if ots+ots2 != 8192 { return; }
-                    data_collector.send(MessageToDataCollector::VideoTs{pts: msg.pts, ots}).unwrap();
+                    data_collector.send(MessageToDataCollector::VideoTs{pts: pts, ots}).unwrap();
                     decoded.set(true);
                 };
 
@@ -283,34 +285,18 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                         decoded_code_handler(&qr.data);
                         if decoded.get() { continue 'msgloop; }
                     }
+                    let ib = image::ImageBuffer::<image::Luma<u8>,_>::from_vec(msg.width, msg.height, msg.buf).unwrap();
                     // Now also try downscaled variants
-                    let mut hw = msg.width as usize / 2;
-                    let mut hh = msg.height as usize / 2;
-                    let mut downscaled = vec![0u8; hw as usize*hh as usize];
-                    for layer in (2..=5).rev() {
-                        hw = msg.width as usize / layer;
-                        hh = msg.height as usize / layer;
-                        downscaled.clear();
-                        downscaled.resize(hw*hh, 0); 
-                        for mut phase_y in 0..=1 {
-                            if layer >= 4 {
-                                phase_y *= 2;
-                            }
-                            for mut phase_x in 0..=1 {
-                                if layer >= 4 {
-                                    phase_x *= 2;
-                                }
-                                //dbg!(layer, phase_x, phase_y, hh, hw);
-                                for y in 0..hh {
-                                    for x in 0..hw {
-                                        downscaled[y*hw + x] = msg.buf[(layer*y + phase_y)*msg.width as usize + layer*x + phase_x];
-                                    }
-                                }
-                                for qr in decoder.scan_y800(&downscaled, hw as u32, hh as u32).unwrap() {
-                                    decoded_code_handler(&qr.data);
-                                    if decoded.get() { continue 'msgloop; }
-                                }
-                            }
+                    for layer in (4..=10).rev() {
+                        let scaled = image::imageops::resize(
+                            &ib,
+                            msg.width * 2 / layer,
+                            msg.height * 2 / layer,
+                            image::imageops::FilterType::Triangle,
+                        );
+                        for qr in decoder.scan_y800(scaled.as_flat_samples().as_slice(), scaled.width(), scaled.height()).unwrap() {
+                            decoded_code_handler(&qr.data);
+                            if decoded.get() { continue 'msgloop; }
                         }
                     }
                 }
