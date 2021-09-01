@@ -13,13 +13,17 @@ env_logger = {version = "0.9.0", default_features=false }
 flume = "0.10.9"
 gumdrop = "0.8.0"
 itertools = "0.10.1"
-#image = "0.22"
+#image = "0.23"
 log = "0.4.14"
 mkv = "0.0.8"
 num-complex = "0.4.0"
 ordered-float = "2.7.0"
+rqrr = {version="0.3.2", default-features = false, optional=true }
 rustfft = { version = "6.0.1", default-features = false }
-zbar-rust = "0.0.18"
+zbar-rust = {version="0.0.18", optional=true}
+
+[features]
+default = ["zbar-rust"]
 
 [dev-dependencies]
 wav = "1.0.0"

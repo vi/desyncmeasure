@@ -242,22 +242,43 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
         let rx = rx.clone();
         let data_collector = data_collector.clone();
         std::thread::spawn(move || {
+            #[cfg(feature = "zbar-rust")]
             let mut decoder = zbar_rust::ZBarImageScanner::new();
+
             data_collector.send(MessageToDataCollector::VideoThreadStarted).unwrap();
             for msg in rx {
                 let msg : MessageToVideoDecoder = msg;
                 if msg.buf.len() == 0 { break }
-                for qr in decoder.scan_y800(&msg.buf, msg.width, msg.height).unwrap() {
-                    if qr.data.len() != 4+4+1 { continue; }
-                    if ! qr.data[0..4].iter().all(|x| *x >= b'0' && *x <= b'9') { continue; }
-                    if qr.data[4] != b' ' { continue; }
-                    if ! qr.data[5..9].iter().all(|x| *x >= b'0' && *x <= b'9') { continue; }
 
-                    let ots : u32 = String::from_utf8_lossy(&qr.data[0..4]).parse().unwrap();
-                    let ots2 : u32 = String::from_utf8_lossy(&qr.data[5..9]).parse().unwrap();
+                let decoded_code_handler = |qr:&[u8]| {
+                    if qr.len() != 4+4+1 { return; }
+                    if ! qr[0..4].iter().all(|x| *x >= b'0' && *x <= b'9') { return; }
+                    if qr[4] != b' ' { return; }
+                    if ! qr[5..9].iter().all(|x| *x >= b'0' && *x <= b'9') { return; }
 
-                    if ots+ots2 != 8192 { continue; }
+                    let ots : u32 = String::from_utf8_lossy(&qr[0..4]).parse().unwrap();
+                    let ots2 : u32 = String::from_utf8_lossy(&qr[5..9]).parse().unwrap();
+
+                    if ots+ots2 != 8192 { return; }
                     data_collector.send(MessageToDataCollector::VideoTs{pts: msg.pts, ots}).unwrap();
+                };
+
+                #[cfg(feature = "rqrr")] {
+                    let mut pi = rqrr::PreparedImage::prepare_from_greyscale(msg.width as usize, msg.height as usize, |x,y| {
+                        msg.buf[y*(msg.width as usize) + x]
+                    });
+                    for grid in pi.detect_grids() {
+                        if let Ok((_, qr)) = grid.decode() {
+                            let qr = qr.as_bytes();
+                            decoded_code_handler(qr);
+                        }
+                    }
+                }
+
+                #[cfg(feature = "zbar-rust")] {
+                    for qr in decoder.scan_y800(&msg.buf, msg.width, msg.height).unwrap() {
+                        decoded_code_handler(&qr.data);
+                    }
                 }
             }
             data_collector.send(MessageToDataCollector::VideoThreadFinished).unwrap();
