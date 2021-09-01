@@ -244,9 +244,10 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
         std::thread::spawn(move || {
             #[cfg(feature = "zbar-rust")]
             let mut decoder = zbar_rust::ZBarImageScanner::new();
+            let decoded = std::cell::Cell::new(false);
 
             data_collector.send(MessageToDataCollector::VideoThreadStarted).unwrap();
-            for msg in rx {
+            'msgloop: for msg in rx {
                 let msg : MessageToVideoDecoder = msg;
                 if msg.buf.len() == 0 { break }
 
@@ -261,6 +262,7 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
 
                     if ots+ots2 != 8192 { return; }
                     data_collector.send(MessageToDataCollector::VideoTs{pts: msg.pts, ots}).unwrap();
+                    decoded.set(true);
                 };
 
                 #[cfg(feature = "rqrr")] {
@@ -271,6 +273,7 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                         if let Ok((_, qr)) = grid.decode() {
                             let qr = qr.as_bytes();
                             decoded_code_handler(qr);
+                            if decoded { continue 'msgloop; }
                         }
                     }
                 }
@@ -278,17 +281,37 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                 #[cfg(feature = "zbar-rust")] {
                     for qr in decoder.scan_y800(&msg.buf, msg.width, msg.height).unwrap() {
                         decoded_code_handler(&qr.data);
+                        if decoded.get() { continue 'msgloop; }
                     }
-                    let hw = msg.width as usize / 2;
-                    let hh = msg.height as usize / 2;
+                    // Now also try downscaled variants
+                    let mut hw = msg.width as usize / 2;
+                    let mut hh = msg.height as usize / 2;
                     let mut downscaled = vec![0u8; hw as usize*hh as usize];
-                    for y in 0..hh {
-                        for x in 0..hw {
-                            downscaled[y*hw + x] = msg.buf[2*y*msg.width as usize + 2*x];
+                    for layer in (2..=5).rev() {
+                        hw = msg.width as usize / layer;
+                        hh = msg.height as usize / layer;
+                        downscaled.clear();
+                        downscaled.resize(hw*hh, 0); 
+                        for mut phase_y in 0..=1 {
+                            if layer >= 4 {
+                                phase_y *= 2;
+                            }
+                            for mut phase_x in 0..=1 {
+                                if layer >= 4 {
+                                    phase_x *= 2;
+                                }
+                                //dbg!(layer, phase_x, phase_y, hh, hw);
+                                for y in 0..hh {
+                                    for x in 0..hw {
+                                        downscaled[y*hw + x] = msg.buf[(layer*y + phase_y)*msg.width as usize + layer*x + phase_x];
+                                    }
+                                }
+                                for qr in decoder.scan_y800(&downscaled, hw as u32, hh as u32).unwrap() {
+                                    decoded_code_handler(&qr.data);
+                                    if decoded.get() { continue 'msgloop; }
+                                }
+                            }
                         }
-                    }
-                    for qr in decoder.scan_y800(&downscaled, hw as u32, hh as u32).unwrap() {
-                        decoded_code_handler(&qr.data);
                     }
                 }
             }
