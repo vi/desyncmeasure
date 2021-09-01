@@ -26,7 +26,7 @@ perl -wne '
                     print (($last_dv+0.2) . " dV NaN\n");
                 }
             }
-            print "$ots $typ ".($pts-1)."\n";
+            print "$ots $typ ".(-$pts-1)."\n";
             $last_dv = $ots;
         } elsif ($typ eq "De") {
             if (defined($last_delay)) {

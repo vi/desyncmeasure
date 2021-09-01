@@ -102,7 +102,7 @@ impl DataCollector {
                 // maybe outliner
                 self.ots_rachet_spike_charge += 1.0;
 
-                if self.ots_rachet_spike_charge > 4.0 {
+                if self.ots_rachet_spike_charge > 9.0 {
                     self.ots_rachet_spike_charge = 0.0;
                     self.ots_rachet = ots - 2048;
                 }
@@ -115,7 +115,7 @@ impl DataCollector {
         }
 
         ots += self.epoch as i32 * 8192;
-        
+
         if self.ots_rachet >= 8192 {
             self.ots_rachet = 0;
             self.epoch += 1;
