@@ -287,13 +287,35 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                     }
                     let ib = image::ImageBuffer::<image::Luma<u8>,_>::from_vec(msg.width, msg.height, msg.buf).unwrap();
                     // Now also try downscaled variants
+                    let halfscaled  = image::imageops::resize(
+                        &ib,
+                        msg.width / 2,
+                        msg.height / 2,
+                        image::imageops::FilterType::Triangle,
+                    );
                     for layer in (4..=10).rev() {
-                        let scaled = image::imageops::resize(
-                            &ib,
-                            msg.width * 2 / layer,
-                            msg.height * 2 / layer,
-                            image::imageops::FilterType::Triangle,
-                        );
+                        let scaled_buf;
+                        let scaled = match layer {
+                            4 => &halfscaled,
+                            3 | 5 => {
+                                scaled_buf = image::imageops::resize(
+                                    &ib,
+                                    msg.width * 2 / layer,
+                                    msg.height * 2 / layer,
+                                    image::imageops::FilterType::Triangle,
+                                );
+                                &scaled_buf
+                            },
+                            _ => {
+                                scaled_buf = image::imageops::resize(
+                                    &halfscaled,
+                                    msg.width  * 2 / layer,
+                                    msg.height * 2 / layer,
+                                    image::imageops::FilterType::Triangle,
+                                );
+                                &scaled_buf
+                            },
+                        };
                         for qr in decoder.scan_y800(scaled.as_flat_samples().as_slice(), scaled.width(), scaled.height()).unwrap() {
                             decoded_code_handler(&qr.data);
                             if decoded.get() { continue 'msgloop; }
