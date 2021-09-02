@@ -316,6 +316,7 @@ fn video_decoders(num_threads: usize, data_collector: flume::Sender<MessageToDat
                                 &scaled_buf
                             },
                         };
+                        assert_eq!(scaled.as_flat_samples().strides_cwh(), (1,1,scaled.width() as usize));
                         for qr in decoder.scan_y800(scaled.as_flat_samples().as_slice(), scaled.width(), scaled.height()).unwrap() {
                             decoded_code_handler(&qr.data);
                             if decoded.get() { continue 'msgloop; }
