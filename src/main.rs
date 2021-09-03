@@ -47,12 +47,13 @@ struct EncountreedStampData {
 
 struct DataCollector {
     video_minimal_ots : u32,
+    video_baseline_pts: f64,
     audio_minimal_ots : u32,
+    audio_baseline_pts: f64,
 
     ots_rachet: u32,
     
     encountered_stamps: std::collections::HashMap<u32, EncountreedStampData>,
-    baseline_pts: f64,
 
     video_threads_active: usize,
     audio_finished: bool,
@@ -74,9 +75,10 @@ impl DataCollector {
     fn new(threads_for_video: usize) -> DataCollector {
         DataCollector {
             audio_minimal_ots : u32::MAX,
+            audio_baseline_pts: f64::INFINITY,
             video_minimal_ots: u32::MAX,
+            video_baseline_pts: f64::INFINITY,
             encountered_stamps: Default::default(),
-            baseline_pts: f64::INFINITY,
             video_threads_active: 0,
             audio_finished: false,
             threads_for_video,
@@ -155,15 +157,15 @@ impl DataCollector {
                                 self.audio_minimal_ots = ots;
                             }
 
-                            if pts < self.baseline_pts {
-                                self.baseline_pts = pts;
+                            if pts < self.audio_baseline_pts {
+                                self.audio_baseline_pts = pts;
                             }
 
                             //dbg!(a.minimal_ots, self.baseline_tc, ots, tc_s);
                             println!(
                                 "{} dA {:.3}",
                                 (ots as f32)/10.0,
-                                (pts - self.baseline_pts) - ((ots - self.audio_minimal_ots) as f64)/10.0,
+                                (pts - self.audio_baseline_pts) - ((ots - self.audio_minimal_ots) as f64)/10.0,
                             );
                             enc_tss.maybe_print_delta(ots);
                         }
@@ -183,15 +185,15 @@ impl DataCollector {
                             self.video_minimal_ots = ots;
                         }
     
-                        if pts < self.baseline_pts {
-                            self.baseline_pts = pts;
+                        if pts < self.video_baseline_pts {
+                            self.video_baseline_pts = pts;
                         }
     
                         //dbg!(v.minimal_ots, self.baseline_tc, ots, tc_s);
                         println!(
                             "{} dV {:.3}",
                             (ots as f32)/10.0,
-                            (pts - self.baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
+                            (pts - self.video_baseline_pts) - ((ots - self.video_minimal_ots) as f64)/10.0,
                         );
     
                         enc_tss.maybe_print_delta(ots);
