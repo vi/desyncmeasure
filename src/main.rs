@@ -61,6 +61,7 @@ struct DataCollector {
     threads_for_video: usize,
     ots_rachet_spike_charge: f32,
     epoch: u32,
+    first_ots_ever: bool,
 }
 
 enum MessageToDataCollector {
@@ -85,10 +86,16 @@ impl DataCollector {
             ots_rachet: 0,
             epoch: 0,
             ots_rachet_spike_charge: 0.0,
+            first_ots_ever: true,
         }
     }
 
     fn process_ots_wraparound(&mut self, ots: u32) -> u32 {
+        if self.first_ots_ever && ots > 4096 {
+            self.ots_rachet = ots - 2048;
+        }
+        self.first_ots_ever = false;
+
         let mut ots = ots as i32;
         if ots < self.ots_rachet as i32 {
             ots += 8192;
@@ -146,6 +153,7 @@ impl DataCollector {
                         video_msg_sorter.push((std::cmp::Reverse(ordered_float::OrderedFloat(pts)),ots));
                     }
                     AudioTs { pts, ots } => {
+                        //eprintln!("pre-wraparound audio ots: {}", ots);
                         let ots = self.process_ots_wraparound(ots);
                         let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
                         if enc_tss.audio_ts.is_none() {
@@ -175,6 +183,7 @@ impl DataCollector {
 
                 while video_msg_sorter.len() >= max_video_msg || (video_msg_sorter.len() > 0 && exiting) {
                     let (std::cmp::Reverse(ordered_float::OrderedFloat( pts)), ots) = video_msg_sorter.pop().unwrap();
+                    //eprintln!("pre-wraparound video ots: {}", ots);
                     let ots = self.process_ots_wraparound(ots);
                     let enc_tss = self.encountered_stamps.entry(ots).or_insert_with(Default::default);
                     if enc_tss.video_ts.is_none() {
