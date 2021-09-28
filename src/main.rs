@@ -62,6 +62,8 @@ struct DataCollector {
     ots_rachet_spike_charge: f32,
     epoch: u32,
     first_ots_ever: bool,
+
+    audio_timestamps_received: usize,
 }
 
 enum MessageToDataCollector {
@@ -87,6 +89,7 @@ impl DataCollector {
             epoch: 0,
             ots_rachet_spike_charge: 0.0,
             first_ots_ever: true,
+            audio_timestamps_received: 0,
         }
     }
 
@@ -159,9 +162,10 @@ impl DataCollector {
                         if enc_tss.audio_ts.is_none() {
                             println!("{} aA {:.3}", (ots as f32) / 10.0, pts);
                             enc_tss.audio_ts = Some(pts);
+                            self.audio_timestamps_received += 1;
                         
 
-                            if ots < self.audio_minimal_ots {
+                            if ots < self.audio_minimal_ots && self.audio_timestamps_received < 10 {
                                 self.audio_minimal_ots = ots;
                             }
 
