@@ -696,7 +696,7 @@ fn main() -> anyhow::Result<()> {
         println!("Legend:");
         println!("  a{{V,A}} - receive timestamp against send {{video,audio}} timestamp. ");
         println!("  d{{V,A}} - Relative {{video,audio}} delay. ");
-        println!("  De - A/V desyncronisation again send timestamp");
+        println!("  De - difference between audio and video timestamps");
         println!("{}", <Opts as gumdrop::Options>::usage());
         return Ok(());
     }
